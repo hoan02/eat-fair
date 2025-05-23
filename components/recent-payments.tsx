@@ -47,12 +47,14 @@ export async function RecentPayments() {
                       <div className="flex items-center gap-2">
                         <Avatar className="h-6 w-6">
                           <AvatarImage
-                            src={payment.members?.avatar_url || "/placeholder.svg"}
-                            alt={payment.members?.name}
+                            src={payment.user?.avatar_url || "/placeholder.svg"}
+                            alt={payment.user?.full_name}
                           />
-                          <AvatarFallback className="text-xs">{payment.members?.name?.charAt(0) || "?"}</AvatarFallback>
+                          <AvatarFallback className="text-xs">
+                            {payment.user?.full_name?.charAt(0) || "?"}
+                          </AvatarFallback>
                         </Avatar>
-                        <span className="text-sm">{payment.members?.name || "Không xác định"}</span>
+                        <span className="text-sm">{payment.user?.full_name || "Không xác định"}</span>
                       </div>
                     </TableCell>
                     <TableCell>

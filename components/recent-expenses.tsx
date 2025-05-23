@@ -2,7 +2,6 @@ import { format, parseISO } from "date-fns"
 import { getExpenses } from "@/app/actions"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 export async function RecentExpenses() {
@@ -44,25 +43,23 @@ export async function RecentExpenses() {
                       <div className="font-medium">{format(parseISO(expense.date), "dd/MM/yyyy")}</div>
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        <span>{expense.food_item}</span>
-                        {expense.receipt_image_url && (
-                          <Badge variant="outline" className="text-xs">
-                            Có hóa đơn
-                          </Badge>
-                        )}
+                      <div className="font-medium">{expense.food_item}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {expense.quantity} x {formatCurrency(expense.unit_price)}
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Avatar className="h-6 w-6">
                           <AvatarImage
-                            src={expense.members?.avatar_url || "/placeholder.svg"}
-                            alt={expense.members?.name}
+                            src={expense.creator?.avatar_url || "/placeholder.svg"}
+                            alt={expense.creator?.full_name}
                           />
-                          <AvatarFallback className="text-xs">{expense.members?.name?.charAt(0) || "?"}</AvatarFallback>
+                          <AvatarFallback className="text-xs">
+                            {expense.creator?.full_name?.charAt(0) || "?"}
+                          </AvatarFallback>
                         </Avatar>
-                        <span className="text-sm">{expense.members?.name || "Không xác định"}</span>
+                        <span className="text-sm">{expense.creator?.full_name || "Không xác định"}</span>
                       </div>
                     </TableCell>
                     <TableCell className="text-right font-medium">{formatCurrency(expense.total_price)}</TableCell>

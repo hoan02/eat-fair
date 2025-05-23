@@ -3,20 +3,75 @@
 import { revalidatePath } from "next/cache"
 import { createServerSupabaseClient } from "@/lib/supabase/server"
 
-// Expense actions
-export async function getExpenses(limit?: number) {
+// User and Group Member actions
+export async function getUsers() {
   const supabase = createServerSupabaseClient()
+  const { data, error } = await supabase.from("users").select("*").order("created_at", { ascending: false })
+
+  if (error) {
+    console.error("Error fetching users:", error)
+    return []
+  }
+
+  return data || []
+}
+
+export async function getGroupMembers(groupId?: string) {
+  const supabase = createServerSupabaseClient()
+
+  let query = supabase.from("group_members").select(`
+      *,
+      user:users(
+        id,
+        full_name,
+        email,
+        avatar_url
+      ),
+      group:groups(
+        id,
+        name,
+        group_code
+      )
+    `)
+
+  if (groupId) {
+    query = query.eq("group_id", groupId)
+  }
+
+  const { data, error } = await query
+
+  if (error) {
+    console.error("Error fetching group members:", error)
+    return []
+  }
+
+  return data || []
+}
+
+// Expense actions
+export async function getExpenses(limit?: number, groupId?: string) {
+  const supabase = createServerSupabaseClient()
+
   let query = supabase
     .from("expenses")
     .select(`
-    *,
-    members!created_by (
-      id,
-      name,
-      avatar_url
-    )
-  `)
+      *,
+      creator:users!created_by(
+        id,
+        full_name,
+        email,
+        avatar_url
+      ),
+      group:groups(
+        id,
+        name
+      )
+    `)
     .order("date", { ascending: false })
+
+  if (groupId) {
+    query = query.eq("group_id", groupId)
+  }
 
   if (limit) {
     query = query.limit(limit)
@@ -26,10 +81,10 @@ export async function getExpenses(limit?: number) {
 
   if (error) {
     console.error("Error fetching expenses:", error)
-    throw new Error("Failed to fetch expenses")
+    return []
   }
 
-  return data
+  return data || []
 }
 
 export async function getExpenseById(id: string) {
@@ -38,10 +93,15 @@ export async function getExpenseById(id: string) {
     .from("expenses")
     .select(`
       *,
-      members!created_by (
+      creator:users!created_by(
         id,
-        name,
+        full_name,
+        email,
         avatar_url
+      ),
+      group:groups(
+        id,
+        name
       )
     `)
     .eq("id", id)
@@ -64,6 +124,7 @@ export async function addExpense(expense: {
   notes?: string
   receipt_image_url?: string
   created_by: string
+  group_id: string
   participants?: string[]
 }) {
   const supabase = createServerSupabaseClient()
@@ -213,24 +274,35 @@ export async function deleteMember(id: string) {
 }
 
 // Payment actions
-export async function getPayments(limit?: number) {
+export async function getPayments(limit?: number, groupId?: string) {
   const supabase = createServerSupabaseClient()
+
   let query = supabase
     .from("payments")
     .select(`
       *,
-      members!payments_member_id_fkey (
+      user:users!user_id(
         id,
-        name,
+        full_name,
+        email,
         avatar_url
       ),
-      approver:members!payments_approved_by_fkey (
+      approver:users!approved_by(
         id,
-        name,
+        full_name,
+        email,
         avatar_url
+      ),
+      group:groups(
+        id,
+        name
       )
     `)
     .order("payment_date", { ascending: false })
+
+  if (groupId) {
+    query = query.eq("group_id", groupId)
+  }
 
   if (limit) {
     query = query.limit(limit)
@@ -240,10 +312,10 @@ export async function getPayments(limit?: number) {
 
   if (error) {
     console.error("Error fetching payments:", error)
-    throw new Error("Failed to fetch payments")
+    return []
   }
 
-  return data
+  return data || []
 }
 
 export async function getPaymentById(id: string) {
@@ -252,15 +324,21 @@ export async function getPaymentById(id: string) {
     .from("payments")
     .select(`
       *,
-      members!payments_member_id_fkey (
+      user:users!user_id(
         id,
-        name,
+        full_name,
+        email,
         avatar_url
       ),
-      approver:members!payments_approved_by_fkey (
+      approver:users!approved_by(
         id,
-        name,
+        full_name,
+        email,
         avatar_url
+      ),
+      group:groups(
+        id,
+        name
       )
     `)
     .eq("id", id)
@@ -275,7 +353,8 @@ export async function getPaymentById(id: string) {
 }
 
 export async function addPayment(payment: {
-  member_id: string
+  user_id: string
+  group_id: string
   amount: number
   payment_date?: string
   payment_method?: string
@@ -301,7 +380,7 @@ export async function addPayment(payment: {
 export async function updatePayment(
   id: string,
   payment: {
-    member_id?: string
+    user_id?: string
     amount?: number
     payment_date?: string
     payment_method?: string
@@ -349,27 +428,60 @@ export async function approvePayment(id: string, approverId: string) {
 }
 
 // Food items actions
-export async function getFoodItems(category?: string) {
+export async function getFoodItems(category?: string, groupId?: string) {
   const supabase = createServerSupabaseClient()
-  let query = supabase.from("food_items").select("*")
+
+  let query = supabase.from("food_items").select(`
+      *,
+      creator:users!created_by(
+        id,
+        full_name,
+        email,
+        avatar_url
+      ),
+      group:groups(
+        id,
+        name
+      )
+    `)
 
   if (category) {
     query = query.eq("category", category)
+  }
+
+  if (groupId) {
+    query = query.eq("group_id", groupId)
   }
 
   const { data, error } = await query
 
   if (error) {
     console.error("Error fetching food items:", error)
-    throw new Error("Failed to fetch food items")
+    return []
   }
 
-  return data
+  return data || []
 }
 
 export async function getFoodItemById(id: string) {
   const supabase = createServerSupabaseClient()
-  const { data, error } = await supabase.from("food_items").select("*").eq("id", id).single()
+  const { data, error } = await supabase
+    .from("food_items")
+    .select(`
+      *,
+      creator:users!created_by(
+        id,
+        full_name,
+        email,
+        avatar_url
+      ),
+      group:groups(
+        id,
+        name
+      )
+    `)
+    .eq("id", id)
+    .single()
 
   if (error) {
     console.error("Error fetching food item:", error)
@@ -385,6 +497,8 @@ export async function addFoodItem(foodItem: {
   description?: string
   image_url?: string
   category?: string
+  group_id: string
+  created_by: string
 }) {
   const supabase = createServerSupabaseClient()
   const { error } = await supabase.from("food_items").insert(foodItem)
@@ -431,42 +545,41 @@ export async function deleteFoodItem(id: string) {
 }
 
 // Summary calculations
-export async function getSummary() {
+export async function getSummary(groupId?: string) {
   const supabase = createServerSupabaseClient()
 
   try {
-    // Get total expenses
-    const { data: expenses, error: expensesError } = await supabase.from("expenses").select("total_price, participants")
+    // Get total expenses for the group
+    let expensesQuery = supabase.from("expenses").select("total_price, participants")
+    if (groupId) {
+      expensesQuery = expensesQuery.eq("group_id", groupId)
+    }
+    const { data: expenses, error: expensesError } = await expensesQuery
 
     if (expensesError) {
       console.error("Error fetching expense totals:", expensesError)
-      throw new Error("Failed to calculate summary")
     }
 
-    // Get total payments
-    const { data: payments, error: paymentsError } = await supabase.from("payments").select("amount")
+    // Get total payments for the group
+    let paymentsQuery = supabase.from("payments").select("amount, user_id")
+    if (groupId) {
+      paymentsQuery = paymentsQuery.eq("group_id", groupId)
+    }
+    const { data: payments, error: paymentsError } = await paymentsQuery
 
     if (paymentsError) {
       console.error("Error fetching payment totals:", paymentsError)
-      throw new Error("Failed to calculate summary")
     }
 
-    // Get all members
-    const { data: members, error: membersError } = await supabase.from("members").select("id")
+    // Get all group members
+    let membersQuery = supabase.from("group_members").select("user_id")
+    if (groupId) {
+      membersQuery = membersQuery.eq("group_id", groupId)
+    }
+    const { data: members, error: membersError } = await membersQuery
 
     if (membersError) {
       console.error("Error counting members:", membersError)
-      throw new Error("Failed to calculate summary")
-    }
-
-    // Get payments by member
-    const { data: paymentsByMember, error: paymentsByMemberError } = await supabase
-      .from("payments")
-      .select("member_id, amount")
-
-    if (paymentsByMemberError) {
-      console.error("Error fetching payments by member:", paymentsByMemberError)
-      throw new Error("Failed to calculate summary")
     }
 
     const totalExpenses = expenses?.reduce((sum, expense) => sum + Number(expense.total_price || 0), 0) || 0
@@ -479,8 +592,8 @@ export async function getSummary() {
 
     if (members) {
       members.forEach((member) => {
-        memberExpenses[member.id] = 0
-        memberPayments[member.id] = 0
+        memberExpenses[member.user_id] = 0
+        memberPayments[member.user_id] = 0
       })
     }
 
@@ -489,7 +602,7 @@ export async function getSummary() {
       expenses.forEach((expense) => {
         // If no participants specified, assume all members participate
         const participants =
-          expense.participants && expense.participants.length > 0 ? expense.participants : members.map((m) => m.id)
+          expense.participants && expense.participants.length > 0 ? expense.participants : members.map((m) => m.user_id)
 
         const participantCount = participants.length
         const amountPerParticipant = participantCount > 0 ? Number(expense.total_price || 0) / participantCount : 0
@@ -503,10 +616,10 @@ export async function getSummary() {
     }
 
     // Calculate payments per member
-    if (paymentsByMember) {
-      paymentsByMember.forEach((payment) => {
-        if (memberPayments[payment.member_id] !== undefined) {
-          memberPayments[payment.member_id] += Number(payment.amount || 0)
+    if (payments) {
+      payments.forEach((payment) => {
+        if (memberPayments[payment.user_id] !== undefined) {
+          memberPayments[payment.user_id] += Number(payment.amount || 0)
         }
       })
     }
@@ -515,9 +628,9 @@ export async function getSummary() {
     const memberBalances = {}
     if (members) {
       members.forEach((member) => {
-        const owed = memberExpenses[member.id] || 0
-        const paid = memberPayments[member.id] || 0
-        memberBalances[member.id] = {
+        const owed = memberExpenses[member.user_id] || 0
+        const paid = memberPayments[member.user_id] || 0
+        memberBalances[member.user_id] = {
           owed,
           paid,
           balance: paid - owed,
@@ -545,4 +658,106 @@ export async function getSummary() {
       memberBalances: {},
     }
   }
+}
+
+// Group actions
+export async function getGroups() {
+  const supabase = createServerSupabaseClient()
+  const { data, error } = await supabase
+    .from("groups")
+    .select(`
+      *,
+      creator:users!created_by(
+        id,
+        full_name,
+        email,
+        avatar_url
+      )
+    `)
+    .order("created_at", { ascending: false })
+
+  if (error) {
+    console.error("Error fetching groups:", error)
+    return []
+  }
+
+  return data || []
+}
+
+export async function getGroupById(id: string) {
+  const supabase = createServerSupabaseClient()
+  const { data, error } = await supabase
+    .from("groups")
+    .select(`
+      *,
+      creator:users!created_by(
+        id,
+        full_name,
+        email,
+        avatar_url
+      )
+    `)
+    .eq("id", id)
+    .single()
+
+  if (error) {
+    console.error("Error fetching group:", error)
+    throw new Error("Failed to fetch group")
+  }
+
+  return data
+}
+
+export async function createGroup(group: {
+  name: string
+  description?: string
+  created_by: string
+}) {
+  const supabase = createServerSupabaseClient()
+  const { data, error } = await supabase.from("groups").insert(group).select().single()
+
+  if (error) {
+    console.error("Error creating group:", error)
+    throw new Error("Failed to create group")
+  }
+
+  // Add creator as owner
+  await supabase.from("group_members").insert({
+    user_id: group.created_by,
+    group_id: data.id,
+    role: "owner",
+  })
+
+  revalidatePath("/groups")
+  return data
+}
+
+export async function joinGroup(groupCode: string, userId: string) {
+  const supabase = createServerSupabaseClient()
+
+  // Find group by code
+  const { data: group, error: groupError } = await supabase
+    .from("groups")
+    .select("id")
+    .eq("group_code", groupCode)
+    .single()
+
+  if (groupError || !group) {
+    throw new Error("Group not found")
+  }
+
+  // Add user to group
+  const { error } = await supabase.from("group_members").insert({
+    user_id: userId,
+    group_id: group.id,
+    role: "member",
+  })
+
+  if (error) {
+    console.error("Error joining group:", error)
+    throw new Error("Failed to join group")
+  }
+
+  revalidatePath("/groups")
+  return group
 }
