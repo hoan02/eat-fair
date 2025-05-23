@@ -3,6 +3,90 @@
 import { revalidatePath } from "next/cache"
 import { createServerSupabaseClient } from "@/lib/supabase/server"
 
+// Auth actions
+export async function getCurrentUser() {
+  const supabase = createServerSupabaseClient()
+
+  try {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser()
+
+    if (error || !user) {
+      return null
+    }
+
+    // Get additional user info from users table
+    const { data: userProfile, error: profileError } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", user.id)
+      .single()
+
+    if (profileError) {
+      console.error("Error fetching user profile:", profileError)
+      // Return basic user info if profile fetch fails
+      return {
+        id: user.id,
+        email: user.email,
+        full_name: user.user_metadata?.full_name || user.email,
+        avatar_url: user.user_metadata?.avatar_url || null,
+        created_at: user.created_at,
+      }
+    }
+
+    return userProfile
+  } catch (error) {
+    console.error("Error getting current user:", error)
+    return null
+  }
+}
+
+export async function getUserGroups(userId?: string) {
+  const supabase = createServerSupabaseClient()
+
+  if (!userId) {
+    const currentUser = await getCurrentUser()
+    if (!currentUser) return []
+    userId = currentUser.id
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("group_members")
+      .select(`
+        *,
+        group:groups(
+          id,
+          name,
+          description,
+          group_code,
+          avatar_url,
+          created_at,
+          creator:users!created_by(
+            id,
+            full_name,
+            email,
+            avatar_url
+          )
+        )
+      `)
+      .eq("user_id", userId)
+      .order("joined_at", { ascending: false })
+
+    if (error) {
+      console.error("Error fetching user groups:", error)
+      return []
+    }
+
+    return data || []
+  } catch (error) {
+    console.error("Error in getUserGroups:", error)
+    return []
+  }
+}
+
 // User and Group Member actions
 export async function getUsers() {
   const supabase = createServerSupabaseClient()
@@ -180,41 +264,53 @@ export async function deleteExpense(id: string) {
   revalidatePath("/")
 }
 
-// Member actions
+// Member actions (legacy - for backward compatibility)
 export async function getMembers() {
-  const supabase = createServerSupabaseClient()
-  const { data, error } = await supabase.from("members").select("*")
-
-  if (error) {
-    console.error("Error fetching members:", error)
-    throw new Error("Failed to fetch members")
-  }
-
-  return data
+  // This function is kept for backward compatibility
+  // In the new schema, we use getGroupMembers instead
+  return []
 }
 
 export async function getMemberById(id: string) {
   const supabase = createServerSupabaseClient()
-  const { data, error } = await supabase.from("members").select("*").eq("id", id).single()
+  const { data, error } = await supabase.from("users").select("*").eq("id", id).single()
 
   if (error) {
-    console.error("Error fetching member:", error)
-    throw new Error("Failed to fetch member")
+    console.error("Error fetching user:", error)
+    throw new Error("Failed to fetch user")
   }
 
   return data
 }
 
-export async function getGroupLeaders() {
+export async function getGroupLeaders(groupId?: string) {
   const supabase = createServerSupabaseClient()
-  const { data, error } = await supabase.from("members").select("*").eq("is_group_leader", true)
+
+  let query = supabase
+    .from("group_members")
+    .select(`
+      *,
+      user:users(
+        id,
+        full_name,
+        email,
+        avatar_url
+      )
+    `)
+    .in("role", ["owner", "admin"])
+
+  if (groupId) {
+    query = query.eq("group_id", groupId)
+  }
+
+  const { data, error } = await query
 
   if (error) {
     console.error("Error fetching group leaders:", error)
-    throw new Error("Failed to fetch group leaders")
+    return []
   }
 
-  return data
+  return data || []
 }
 
 export async function addMember(member: {
@@ -225,16 +321,8 @@ export async function addMember(member: {
   address?: string
   email?: string
 }) {
-  const supabase = createServerSupabaseClient()
-  const { error } = await supabase.from("members").insert(member)
-
-  if (error) {
-    console.error("Error adding member:", error)
-    throw new Error("Failed to add member")
-  }
-
-  revalidatePath("/members")
-  revalidatePath("/")
+  // This function is deprecated in favor of group-based member management
+  throw new Error("Use group-based member management instead")
 }
 
 export async function updateMember(
@@ -248,29 +336,13 @@ export async function updateMember(
     email?: string
   },
 ) {
-  const supabase = createServerSupabaseClient()
-  const { error } = await supabase.from("members").update(member).eq("id", id)
-
-  if (error) {
-    console.error("Error updating member:", error)
-    throw new Error("Failed to update member")
-  }
-
-  revalidatePath("/members")
-  revalidatePath("/")
+  // This function is deprecated in favor of group-based member management
+  throw new Error("Use group-based member management instead")
 }
 
 export async function deleteMember(id: string) {
-  const supabase = createServerSupabaseClient()
-  const { error } = await supabase.from("members").delete().eq("id", id)
-
-  if (error) {
-    console.error("Error deleting member:", error)
-    throw new Error("Failed to delete member")
-  }
-
-  revalidatePath("/members")
-  revalidatePath("/")
+  // This function is deprecated in favor of group-based member management
+  throw new Error("Use group-based member management instead")
 }
 
 // Payment actions
