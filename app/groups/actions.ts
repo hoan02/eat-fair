@@ -2,50 +2,347 @@
 
 import { revalidatePath } from "next/cache"
 import { createServerSupabaseClient } from "@/lib/supabase/server"
+import { getWithCache, invalidateCache } from "@/lib/redis"
 import { getCurrentUser } from "@/app/auth/actions"
 import { redirect } from "next/navigation"
-import { v4 as uuidv4 } from "uuid"
-import { put } from "@vercel/blob"
 
 // Lấy danh sách nhóm của người dùng
 export async function getUserGroups(userId: string) {
-  const supabase = createServerSupabaseClient()
+  const cacheKey = `user:${userId}:groups`
 
-  const { data, error } = await supabase
-    .from("group_members")
-    .select(`
-      id,
-      role,
-      nickname,
-      joined_at,
-      groups (
-        id,
-        name,
-        description,
-        group_code,
-        avatar_url,
-        created_at
+  return getWithCache(
+    cacheKey,
+    async () => {
+      const supabase = createServerSupabaseClient()
+      const { data, error } = await supabase
+        .from("group_members")
+        .select(`
+          id,
+          role,
+          nickname,
+          joined_at,
+          group:groups (
+            id,
+            name,
+            description,
+            group_code,
+            avatar_url,
+            created_at
+          )
+        `)
+        .eq("user_id", userId)
+        .order("joined_at", { ascending: false })
+
+      if (error) {
+        console.error("Error fetching user groups:", error)
+        return []
+      }
+
+      // Chuyển đổi dữ liệu để dễ sử dụng hơn
+      return (
+        data.map((item) => ({
+          id: item.group.id,
+          name: item.group.name,
+          description: item.group.description,
+          group_code: item.group.group_code,
+          avatar_url: item.group.avatar_url,
+          created_at: item.group.created_at,
+          role: item.role,
+          nickname: item.nickname,
+          joined_at: item.joined_at,
+        })) || []
       )
-    `)
-    .eq("user_id", userId)
-    .order("joined_at", { ascending: false })
+    },
+    60 * 15, // Cache trong 15 phút
+  )
+}
 
-  if (error) {
-    console.error("Error fetching user groups:", error)
-    return []
-  }
+// Lấy thông tin chi tiết của nhóm
+export async function getGroupDetails(groupId: string) {
+  const cacheKey = `group:${groupId}:details`
 
-  return data.map((item) => ({
-    id: item.groups.id,
-    name: item.groups.name,
-    description: item.groups.description,
-    group_code: item.groups.group_code,
-    avatar_url: item.groups.avatar_url,
-    created_at: item.groups.created_at,
-    role: item.role,
-    nickname: item.nickname,
-    joined_at: item.joined_at,
-  }))
+  return getWithCache(
+    cacheKey,
+    async () => {
+      const supabase = createServerSupabaseClient()
+      const { data, error } = await supabase
+        .from("groups")
+        .select(`
+          *,
+          creator:users!created_by (
+            id,
+            full_name,
+            email,
+            avatar_url
+          )
+        `)
+        .eq("id", groupId)
+        .single()
+
+      if (error) {
+        console.error("Error fetching group details:", error)
+        throw new Error("Failed to fetch group details")
+      }
+
+      return data
+    },
+    60 * 30, // Cache trong 30 phút
+  )
+}
+
+// Lấy danh sách thành viên trong nhóm
+export async function getGroupMembers(groupId: string) {
+  const cacheKey = `group:${groupId}:members`
+
+  return getWithCache(
+    cacheKey,
+    async () => {
+      const supabase = createServerSupabaseClient()
+      const { data, error } = await supabase
+        .from("group_members")
+        .select(`
+          *,
+          user:users (
+            id,
+            full_name,
+            email,
+            avatar_url,
+            phone
+          )
+        `)
+        .eq("group_id", groupId)
+        .order("role", { ascending: true })
+        .order("joined_at", { ascending: true })
+
+      if (error) {
+        console.error("Error fetching group members:", error)
+        return []
+      }
+
+      return data || []
+    },
+    60 * 10, // Cache trong 10 phút
+  )
+}
+
+// Lấy danh sách chi tiêu của nhóm
+export async function getGroupExpenses(groupId: string, limit?: number) {
+  const cacheKey = `group:${groupId}:expenses${limit ? `:${limit}` : ""}`
+
+  return getWithCache(
+    cacheKey,
+    async () => {
+      const supabase = createServerSupabaseClient()
+
+      let query = supabase
+        .from("expenses")
+        .select(`
+          *,
+          user:created_by (
+            id,
+            full_name,
+            avatar_url
+          )
+        `)
+        .eq("group_id", groupId)
+        .order("date", { ascending: false })
+
+      if (limit) {
+        query = query.limit(limit)
+      }
+
+      const { data, error } = await query
+
+      if (error) {
+        console.error("Error fetching group expenses:", error)
+        return []
+      }
+
+      return data || []
+    },
+    60 * 5, // Cache trong 5 phút
+  )
+}
+
+// Lấy danh sách thanh toán của nhóm
+export async function getGroupPayments(groupId: string, limit?: number) {
+  const cacheKey = `group:${groupId}:payments${limit ? `:${limit}` : ""}`
+
+  return getWithCache(
+    cacheKey,
+    async () => {
+      const supabase = createServerSupabaseClient()
+
+      let query = supabase
+        .from("payments")
+        .select(`
+          *,
+          user:user_id (
+            id,
+            full_name,
+            avatar_url
+          ),
+          approver:approved_by (
+            id,
+            full_name,
+            avatar_url
+          )
+        `)
+        .eq("group_id", groupId)
+        .order("payment_date", { ascending: false })
+
+      if (limit) {
+        query = query.limit(limit)
+      }
+
+      const { data, error } = await query
+
+      if (error) {
+        console.error("Error fetching group payments:", error)
+        return []
+      }
+
+      return data || []
+    },
+    60 * 5, // Cache trong 5 phút
+  )
+}
+
+// Lấy thông tin tổng quan của nhóm
+export async function getGroupSummary(groupId: string) {
+  const cacheKey = `group:${groupId}:summary`
+
+  return getWithCache(
+    cacheKey,
+    async () => {
+      const supabase = createServerSupabaseClient()
+
+      try {
+        // Lấy tổng chi tiêu
+        const { data: expenses, error: expensesError } = await supabase
+          .from("expenses")
+          .select("total_price, participants")
+          .eq("group_id", groupId)
+
+        if (expensesError) {
+          console.error("Error fetching expense totals:", expensesError)
+          throw new Error("Failed to calculate summary")
+        }
+
+        // Lấy tổng thanh toán
+        const { data: payments, error: paymentsError } = await supabase
+          .from("payments")
+          .select("amount")
+          .eq("group_id", groupId)
+
+        if (paymentsError) {
+          console.error("Error fetching payment totals:", paymentsError)
+          throw new Error("Failed to calculate summary")
+        }
+
+        // Lấy tất cả thành viên
+        const { data: members, error: membersError } = await supabase
+          .from("group_members")
+          .select("user_id")
+          .eq("group_id", groupId)
+
+        if (membersError) {
+          console.error("Error counting members:", membersError)
+          throw new Error("Failed to calculate summary")
+        }
+
+        // Lấy thanh toán theo thành viên
+        const { data: paymentsByMember, error: paymentsByMemberError } = await supabase
+          .from("payments")
+          .select("user_id, amount")
+          .eq("group_id", groupId)
+
+        if (paymentsByMemberError) {
+          console.error("Error fetching payments by member:", paymentsByMemberError)
+          throw new Error("Failed to calculate summary")
+        }
+
+        const totalExpenses = expenses?.reduce((sum, expense) => sum + Number(expense.total_price || 0), 0) || 0
+        const totalPayments = payments?.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) || 0
+        const memberCount = members?.length || 0
+
+        // Khởi tạo chi tiêu và thanh toán của thành viên
+        const memberExpenses = {}
+        const memberPayments = {}
+
+        if (members) {
+          members.forEach((member) => {
+            memberExpenses[member.user_id] = 0
+            memberPayments[member.user_id] = 0
+          })
+        }
+
+        // Tính toán chi tiêu cho mỗi thành viên dựa trên participants
+        if (expenses && members) {
+          expenses.forEach((expense) => {
+            // Nếu không có participants, giả định tất cả thành viên tham gia
+            const participants =
+              expense.participants && expense.participants.length > 0
+                ? expense.participants
+                : members.map((m) => m.user_id)
+
+            const participantCount = participants.length
+            const amountPerParticipant = participantCount > 0 ? Number(expense.total_price || 0) / participantCount : 0
+
+            participants.forEach((participantId) => {
+              if (memberExpenses[participantId] !== undefined) {
+                memberExpenses[participantId] += amountPerParticipant
+              }
+            })
+          })
+        }
+
+        // Tính toán thanh toán cho mỗi thành viên
+        if (paymentsByMember) {
+          paymentsByMember.forEach((payment) => {
+            if (memberPayments[payment.user_id] !== undefined) {
+              memberPayments[payment.user_id] += Number(payment.amount || 0)
+            }
+          })
+        }
+
+        // Tính toán số dư của thành viên
+        const memberBalances = {}
+        if (members) {
+          members.forEach((member) => {
+            const owed = memberExpenses[member.user_id] || 0
+            const paid = memberPayments[member.user_id] || 0
+            memberBalances[member.user_id] = {
+              owed,
+              paid,
+              balance: paid - owed,
+            }
+          })
+        }
+
+        const remainingAmount = totalExpenses - totalPayments
+
+        return {
+          totalExpenses,
+          totalPayments,
+          memberCount,
+          remainingAmount,
+          memberBalances,
+        }
+      } catch (error) {
+        console.error("Error in getGroupSummary:", error)
+        // Trả về giá trị mặc định thay vì throw error
+        return {
+          totalExpenses: 0,
+          totalPayments: 0,
+          memberCount: 0,
+          remainingAmount: 0,
+          memberBalances: {},
+        }
+      }
+    },
+    60 * 5, // Cache trong 5 phút
+  )
 }
 
 // Tạo nhóm mới
@@ -70,11 +367,17 @@ export async function createGroup(formData: FormData) {
     // Upload avatar nếu có
     let avatarUrl = null
     if (avatarFile && avatarFile.size > 0) {
-      const filename = `group-avatars/${uuidv4()}-${avatarFile.name}`
-      const blob = await put(filename, avatarFile, {
-        access: "public",
-      })
-      avatarUrl = blob.url
+      const filename = `group-avatars/${Date.now()}-${avatarFile.name}`
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(filename, avatarFile)
+
+      if (uploadError) {
+        console.error("Error uploading avatar:", uploadError)
+      } else {
+        const { data: urlData } = supabase.storage.from("avatars").getPublicUrl(filename)
+        avatarUrl = urlData.publicUrl
+      }
     }
 
     // Tạo nhóm mới
@@ -104,6 +407,9 @@ export async function createGroup(formData: FormData) {
     if (memberError) {
       throw new Error(memberError.message)
     }
+
+    // Xóa cache liên quan
+    await invalidateCache([`user:${user.id}:groups`])
 
     revalidatePath("/groups")
     revalidatePath("/dashboard")
@@ -161,6 +467,9 @@ export async function joinGroup(groupCode: string) {
       throw new Error(joinError.message)
     }
 
+    // Xóa cache liên quan
+    await invalidateCache([`user:${user.id}:groups`, `group:${group.id}:members`])
+
     revalidatePath("/groups")
     revalidatePath("/dashboard")
 
@@ -169,231 +478,6 @@ export async function joinGroup(groupCode: string) {
     console.error("Error joining group:", error)
     return { success: false, error: "Đã xảy ra lỗi khi tham gia nhóm" }
   }
-}
-
-// Lấy thông tin tổng quan của nhóm
-export async function getGroupSummary(groupId: string) {
-  const supabase = createServerSupabaseClient()
-
-  try {
-    // Lấy tổng chi tiêu
-    const { data: expenses, error: expensesError } = await supabase
-      .from("expenses")
-      .select("total_price, participants")
-      .eq("group_id", groupId)
-
-    if (expensesError) {
-      console.error("Error fetching expense totals:", expensesError)
-      throw new Error("Failed to calculate summary")
-    }
-
-    // Lấy tổng thanh toán
-    const { data: payments, error: paymentsError } = await supabase
-      .from("payments")
-      .select("amount")
-      .eq("group_id", groupId)
-
-    if (paymentsError) {
-      console.error("Error fetching payment totals:", paymentsError)
-      throw new Error("Failed to calculate summary")
-    }
-
-    // Lấy tất cả thành viên
-    const { data: members, error: membersError } = await supabase
-      .from("group_members")
-      .select("user_id")
-      .eq("group_id", groupId)
-
-    if (membersError) {
-      console.error("Error counting members:", membersError)
-      throw new Error("Failed to calculate summary")
-    }
-
-    // Lấy thanh toán theo thành viên
-    const { data: paymentsByMember, error: paymentsByMemberError } = await supabase
-      .from("payments")
-      .select("user_id, amount")
-      .eq("group_id", groupId)
-
-    if (paymentsByMemberError) {
-      console.error("Error fetching payments by member:", paymentsByMemberError)
-      throw new Error("Failed to calculate summary")
-    }
-
-    const totalExpenses = expenses?.reduce((sum, expense) => sum + Number(expense.total_price || 0), 0) || 0
-    const totalPayments = payments?.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) || 0
-    const memberCount = members?.length || 0
-
-    // Khởi tạo chi tiêu và thanh toán của thành viên
-    const memberExpenses = {}
-    const memberPayments = {}
-
-    if (members) {
-      members.forEach((member) => {
-        memberExpenses[member.user_id] = 0
-        memberPayments[member.user_id] = 0
-      })
-    }
-
-    // Tính toán chi tiêu cho mỗi thành viên dựa trên participants
-    if (expenses && members) {
-      expenses.forEach((expense) => {
-        // Nếu không có participants, giả định tất cả thành viên tham gia
-        const participants =
-          expense.participants && expense.participants.length > 0 ? expense.participants : members.map((m) => m.user_id)
-
-        const participantCount = participants.length
-        const amountPerParticipant = participantCount > 0 ? Number(expense.total_price || 0) / participantCount : 0
-
-        participants.forEach((participantId) => {
-          if (memberExpenses[participantId] !== undefined) {
-            memberExpenses[participantId] += amountPerParticipant
-          }
-        })
-      })
-    }
-
-    // Tính toán thanh toán cho mỗi thành viên
-    if (paymentsByMember) {
-      paymentsByMember.forEach((payment) => {
-        if (memberPayments[payment.user_id] !== undefined) {
-          memberPayments[payment.user_id] += Number(payment.amount || 0)
-        }
-      })
-    }
-
-    // Tính toán số dư của thành viên
-    const memberBalances = {}
-    if (members) {
-      members.forEach((member) => {
-        const owed = memberExpenses[member.user_id] || 0
-        const paid = memberPayments[member.user_id] || 0
-        memberBalances[member.user_id] = {
-          owed,
-          paid,
-          balance: paid - owed,
-        }
-      })
-    }
-
-    const remainingAmount = totalExpenses - totalPayments
-
-    return {
-      totalExpenses,
-      totalPayments,
-      memberCount,
-      remainingAmount,
-      memberBalances,
-    }
-  } catch (error) {
-    console.error("Error in getGroupSummary:", error)
-    // Trả về giá trị mặc định thay vì throw error
-    return {
-      totalExpenses: 0,
-      totalPayments: 0,
-      memberCount: 0,
-      remainingAmount: 0,
-      memberBalances: {},
-    }
-  }
-}
-
-// Lấy danh sách thành viên của nhóm
-export async function getGroupMembers(groupId: string) {
-  const supabase = createServerSupabaseClient()
-
-  const { data, error } = await supabase
-    .from("group_members")
-    .select(`
-      id,
-      role,
-      nickname,
-      joined_at,
-      user_id,
-      user:users (
-        id,
-        full_name,
-        email,
-        avatar_url,
-        phone
-      )
-    `)
-    .eq("group_id", groupId)
-    .order("role", { ascending: true })
-
-  if (error) {
-    console.error("Error fetching group members:", error)
-    return []
-  }
-
-  return data
-}
-
-// Lấy danh sách chi tiêu của nhóm
-export async function getGroupExpenses(groupId: string, limit?: number) {
-  const supabase = createServerSupabaseClient()
-
-  let query = supabase
-    .from("expenses")
-    .select(`
-      *,
-      user:created_by (
-        id,
-        full_name,
-        avatar_url
-      )
-    `)
-    .eq("group_id", groupId)
-    .order("date", { ascending: false })
-
-  if (limit) {
-    query = query.limit(limit)
-  }
-
-  const { data, error } = await query
-
-  if (error) {
-    console.error("Error fetching group expenses:", error)
-    return []
-  }
-
-  return data
-}
-
-// Lấy danh sách thanh toán của nhóm
-export async function getGroupPayments(groupId: string, limit?: number) {
-  const supabase = createServerSupabaseClient()
-
-  let query = supabase
-    .from("payments")
-    .select(`
-      *,
-      user:user_id (
-        id,
-        full_name,
-        avatar_url
-      ),
-      approver:approved_by (
-        id,
-        full_name,
-        avatar_url
-      )
-    `)
-    .eq("group_id", groupId)
-    .order("payment_date", { ascending: false })
-
-  if (limit) {
-    query = query.limit(limit)
-  }
-
-  const { data, error } = await query
-
-  if (error) {
-    console.error("Error fetching group payments:", error)
-    return []
-  }
-
-  return data
 }
 
 // Cập nhật vai trò thành viên
@@ -441,6 +525,9 @@ export async function updateMemberRole(memberId: string, role: "owner" | "admin"
     if (updateError) {
       throw new Error(updateError.message)
     }
+
+    // Xóa cache liên quan
+    await invalidateCache([`group:${member.group_id}:members`])
 
     revalidatePath(`/groups/${member.group_id}/members`)
 
@@ -506,6 +593,9 @@ export async function removeMemberFromGroup(memberId: string) {
     if (deleteError) {
       throw new Error(deleteError.message)
     }
+
+    // Xóa cache liên quan
+    await invalidateCache([`group:${member.group_id}:members`, `user:${member.user_id}:groups`])
 
     revalidatePath(`/groups/${member.group_id}/members`)
 
