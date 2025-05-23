@@ -1,10 +1,30 @@
 import { Redis } from "@upstash/redis"
 
-// Khởi tạo Redis client
-const redis = new Redis({
-  url: process.env.REDIS_URL || process.env.KV_URL || "",
-  token: process.env.KV_REST_API_TOKEN || "",
-})
+// Kiểm tra và khởi tạo Redis client an toàn
+let redis: Redis | null = null
+
+try {
+  // Sử dụng REST API URL và token từ environment variables
+  const url = process.env.KV_REST_API_URL
+  const token = process.env.KV_REST_API_TOKEN
+
+  if (url && token) {
+    redis = new Redis({
+      url,
+      token,
+    })
+  } else {
+    console.warn("Redis environment variables not found. Redis features will be disabled.")
+  }
+} catch (error) {
+  console.error("Failed to initialize Redis client:", error)
+  redis = null
+}
+
+// Hàm helper để kiểm tra Redis có sẵn không
+function isRedisAvailable(): boolean {
+  return redis !== null
+}
 
 // Hàm lấy dữ liệu từ cache hoặc từ callback nếu cache miss
 export async function getWithCache<T>(
@@ -12,6 +32,12 @@ export async function getWithCache<T>(
   callback: () => Promise<T>,
   expireInSeconds: number = 60 * 5, // Mặc định 5 phút
 ): Promise<T> {
+  // Nếu Redis không khả dụng, gọi trực tiếp callback
+  if (!isRedisAvailable() || !redis) {
+    console.log(`Redis not available, calling callback directly for key: ${key}`)
+    return callback()
+  }
+
   try {
     // Thử lấy dữ liệu từ cache
     const cachedData = await redis.get<T>(key)
@@ -38,6 +64,11 @@ export async function getWithCache<T>(
 
 // Hàm xóa cache khi dữ liệu thay đổi
 export async function invalidateCache(keys: string | string[]): Promise<void> {
+  if (!isRedisAvailable() || !redis) {
+    console.log("Redis not available, skipping cache invalidation")
+    return
+  }
+
   try {
     const keysToDelete = Array.isArray(keys) ? keys : [keys]
 
@@ -65,6 +96,11 @@ export async function storeNotification(
     createdAt: string
   },
 ): Promise<void> {
+  if (!isRedisAvailable() || !redis) {
+    console.log("Redis not available, skipping notification storage")
+    return
+  }
+
   try {
     const key = `user:${userId}:notifications`
 
@@ -85,6 +121,11 @@ export async function storeNotification(
 
 // Hàm lấy danh sách thông báo
 export async function getNotifications(userId: string, limit = 10): Promise<any[]> {
+  if (!isRedisAvailable() || !redis) {
+    console.log("Redis not available, returning empty notifications")
+    return []
+  }
+
   try {
     const key = `user:${userId}:notifications`
     return (await redis.lrange(key, 0, limit - 1)) || []
@@ -96,6 +137,11 @@ export async function getNotifications(userId: string, limit = 10): Promise<any[
 
 // Hàm đánh dấu thông báo đã đọc
 export async function markNotificationAsRead(userId: string, notificationId: string): Promise<void> {
+  if (!isRedisAvailable() || !redis) {
+    console.log("Redis not available, skipping notification update")
+    return
+  }
+
   try {
     const key = `user:${userId}:notifications`
 
@@ -123,6 +169,11 @@ export async function markNotificationAsRead(userId: string, notificationId: str
 
 // Hàm theo dõi người dùng online
 export async function trackUserOnline(userId: string, groupId: string): Promise<void> {
+  if (!isRedisAvailable() || !redis) {
+    console.log("Redis not available, skipping user tracking")
+    return
+  }
+
   try {
     const key = `group:${groupId}:online_users`
 
@@ -138,6 +189,11 @@ export async function trackUserOnline(userId: string, groupId: string): Promise<
 
 // Hàm lấy danh sách người dùng online
 export async function getOnlineUsers(groupId: string): Promise<string[]> {
+  if (!isRedisAvailable() || !redis) {
+    console.log("Redis not available, returning empty online users")
+    return []
+  }
+
   try {
     const key = `group:${groupId}:online_users`
     const onlineUsers = (await redis.hgetall<Record<string, number>>(key)) || {}
